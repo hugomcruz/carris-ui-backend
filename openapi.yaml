@@ -1,0 +1,617 @@
+openapi: 3.1.0
+info:
+  title: Carris Backend API
+  description: |
+    Real-time bus tracking API with Redis and PostgreSQL.
+    
+    This API provides access to:
+    - Real-time vehicle positions and tracking
+    - GTFS static data (stops, routes, shapes)
+    - WebSocket support for live updates
+    
+    Built with Python FastAPI.
+  version: 2.0.0
+  contact:
+    name: Carris Live
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: https://api.carrislive.com
+    description: Production server
+
+tags:
+  - name: vehicles
+    description: Real-time vehicle tracking endpoints
+  - name: stops
+    description: Bus stop information endpoints
+  - name: shapes
+    description: Route shape and geometry endpoints
+  - name: health
+    description: System health and status
+
+paths:
+  /:
+    get:
+      tags:
+        - health
+      summary: Health check
+      description: Returns API status and basic statistics
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  message:
+                    type: string
+                    example: Carris Backend API
+                  version:
+                    type: string
+                    example: 2.0.0
+                  vehicles:
+                    type: integer
+                    description: Number of cached vehicles
+                    example: 150
+                  stops:
+                    type: integer
+                    description: Number of cached stops
+                    example: 2500
+
+  /api/vehicles:
+    get:
+      tags:
+        - vehicles
+      summary: Get all active vehicles
+      description: Returns a list of all currently active vehicles with their positions
+      operationId: getAllVehicles
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VehicleBasic'
+
+  /api/vehicles/{vehicleId}:
+    get:
+      tags:
+        - vehicles
+      summary: Get vehicle details
+      description: Returns detailed information about a specific vehicle
+      operationId: getVehicleDetails
+      parameters:
+        - name: vehicleId
+          in: path
+          required: true
+          description: Unique vehicle identifier
+          schema:
+            type: string
+          example: "1234"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleDetails'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/vehicles/{vehicleId}/track:
+    get:
+      tags:
+        - vehicles
+      summary: Get vehicle track history
+      description: Returns the historical position track for a vehicle
+      operationId: getVehicleTrack
+      parameters:
+        - name: vehicleId
+          in: path
+          required: true
+          description: Unique vehicle identifier
+          schema:
+            type: string
+          example: "1234"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TrackPoint'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/stops:
+    get:
+      tags:
+        - stops
+      summary: Get all bus stops
+      description: Returns a list of all bus stops with basic information
+      operationId: getAllStops
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StopBasic'
+
+  /api/stops/{stopId}:
+    get:
+      tags:
+        - stops
+      summary: Get stop details
+      description: Returns detailed information about a specific stop
+      operationId: getStopDetails
+      parameters:
+        - name: stopId
+          in: path
+          required: true
+          description: Unique stop identifier
+          schema:
+            type: string
+          example: "15E1"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StopDetails'
+        '404':
+          description: Stop not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/stops/trip/{tripId}:
+    get:
+      tags:
+        - stops
+      summary: Get stops for a trip
+      description: Returns an ordered list of stop IDs for a specific trip
+      operationId: getStopsForTrip
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          description: GTFS trip identifier
+          schema:
+            type: string
+          example: "trip_12345"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                example: ["15E1", "15E2", "15E3"]
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/stops/route/{routeShortName}:
+    get:
+      tags:
+        - stops
+      summary: Get stops for a route
+      description: Returns all stop IDs that belong to a specific route
+      operationId: getStopsForRoute
+      parameters:
+        - name: routeShortName
+          in: path
+          required: true
+          description: Route short name (e.g., "728")
+          schema:
+            type: string
+          example: "728"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                example: ["15E1", "15E2", "15E3"]
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/shapes/trip/{tripId}:
+    get:
+      tags:
+        - shapes
+      summary: Get shape for a trip
+      description: Returns the geographic shape (polyline points) for a specific trip
+      operationId: getShapeForTrip
+      parameters:
+        - name: tripId
+          in: path
+          required: true
+          description: GTFS trip identifier
+          schema:
+            type: string
+          example: "trip_12345"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ShapePoint'
+                example: [[38.7223, -9.1393], [38.7224, -9.1394]]
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/shapes/route/{routeShortName}:
+    get:
+      tags:
+        - shapes
+      summary: Get shapes for a route
+      description: Returns all shapes (both directions) for a specific route
+      operationId: getShapesForRoute
+      parameters:
+        - name: routeShortName
+          in: path
+          required: true
+          description: Route short name (e.g., "728")
+          schema:
+            type: string
+          example: "728"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RouteShape'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/shapes/stop/{stopId}:
+    get:
+      tags:
+        - shapes
+      summary: Get shapes for routes passing through a stop
+      description: Returns shapes for all routes that pass through a specific stop
+      operationId: getShapesForStop
+      parameters:
+        - name: stopId
+          in: path
+          required: true
+          description: Unique stop identifier
+          schema:
+            type: string
+          example: "15E1"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StopShape'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    VehicleBasic:
+      type: object
+      description: Basic vehicle information for map display
+      required:
+        - id
+        - lat
+        - lng
+        - rsn
+      properties:
+        id:
+          type: string
+          description: Unique vehicle identifier
+          example: "1234"
+        lat:
+          type: number
+          format: float
+          description: Current latitude
+          example: 38.7223
+        lng:
+          type: number
+          format: float
+          description: Current longitude
+          example: -9.1393
+        rsn:
+          type: string
+          description: Route short name
+          example: "728"
+        lp:
+          type: string
+          description: License plate
+          example: "AB-12-34"
+        tid:
+          type: string
+          description: Trip ID
+          example: "trip_12345"
+        br:
+          type: string
+          description: Bearing/heading in degrees
+          example: "45"
+
+    VehicleDetails:
+      type: object
+      description: Detailed vehicle information
+      required:
+        - id
+        - lat
+        - lng
+      properties:
+        id:
+          type: string
+          description: Unique vehicle identifier
+          example: "1234"
+        lat:
+          type: number
+          format: float
+          description: Current latitude
+          example: 38.7223
+        lng:
+          type: number
+          format: float
+          description: Current longitude
+          example: -9.1393
+        lp:
+          type: string
+          description: License plate
+          example: "AB-12-34"
+        r:
+          type: string
+          description: Route ID
+          example: "route_728"
+        rsn:
+          type: string
+          description: Route short name
+          example: "728"
+        rln:
+          type: string
+          description: Route long name
+          example: "Portela - Algés"
+        s:
+          type: string
+          description: Current stop ID
+          example: "15E1"
+        sn:
+          type: string
+          description: Current stop name
+          example: "Alameda"
+        cs:
+          type: string
+          description: Current status
+          example: "IN_TRANSIT_TO"
+        th:
+          type: string
+          description: Trip headsign
+          example: "Algés"
+        sp:
+          type: string
+          description: Speed in km/h
+          example: "35"
+        br:
+          type: string
+          description: Bearing/heading in degrees
+          example: "45"
+        ts:
+          type: string
+          description: Timestamp
+          example: "1638360000"
+        lu:
+          type: string
+          description: Last updated timestamp
+          example: "2021-12-01T12:00:00Z"
+        tid:
+          type: string
+          description: Trip ID
+          example: "trip_12345"
+        di:
+          type: string
+          description: Direction ID (0 or 1)
+          example: "0"
+
+    TrackPoint:
+      type: object
+      description: A single point in vehicle track history
+      required:
+        - lat
+        - lng
+        - timestamp
+      properties:
+        lat:
+          type: number
+          format: float
+          description: Latitude
+          example: 38.7223
+        lng:
+          type: number
+          format: float
+          description: Longitude
+          example: -9.1393
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix timestamp
+          example: 1638360000
+
+    StopBasic:
+      type: object
+      description: Basic stop information for map display
+      required:
+        - id
+        - lat
+        - lng
+      properties:
+        id:
+          type: string
+          description: Unique stop identifier
+          example: "15E1"
+        lat:
+          type: number
+          format: float
+          description: Latitude
+          example: 38.7223
+        lng:
+          type: number
+          format: float
+          description: Longitude
+          example: -9.1393
+        routes:
+          type: string
+          description: Comma-separated list of routes serving this stop
+          example: "728, 744, 750"
+
+    StopDetails:
+      type: object
+      description: Detailed stop information
+      required:
+        - stop_id
+        - stop_name
+      properties:
+        stop_id:
+          type: string
+          description: Unique stop identifier
+          example: "15E1"
+        stop_name:
+          type: string
+          description: Stop name
+          example: "Alameda"
+        routes:
+          type: string
+          description: Comma-separated list of routes serving this stop
+          example: "728, 744, 750"
+
+    ShapePoint:
+      type: array
+      description: A coordinate pair [latitude, longitude]
+      items:
+        type: number
+        format: float
+      minItems: 2
+      maxItems: 2
+      example: [38.7223, -9.1393]
+
+    RouteShape:
+      type: object
+      description: Shape data for a route direction
+      required:
+        - points
+        - direction
+      properties:
+        points:
+          type: array
+          description: Array of coordinate pairs [lat, lng]
+          items:
+            $ref: '#/components/schemas/ShapePoint'
+        direction:
+          type: integer
+          description: Direction ID (0 = outbound, 1 = inbound)
+          enum: [0, 1]
+          example: 0
+
+    StopShape:
+      type: object
+      description: Shape data for a route passing through a stop
+      required:
+        - route
+        - points
+      properties:
+        route:
+          type: string
+          description: Route short name
+          example: "728"
+        points:
+          type: array
+          description: Array of coordinate objects
+          items:
+            type: object
+            required:
+              - lat
+              - lng
+            properties:
+              lat:
+                type: number
+                format: float
+                example: 38.7223
+              lng:
+                type: number
+                format: float
+                example: -9.1393
+
+    Error:
+      type: object
+      description: Error response
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "Vehicle not found"
+
+  securitySchemes:
+    {}
+
+security: []
+
+externalDocs:
+  description: Full API documentation
+  url: http://localhost:8000/docs
