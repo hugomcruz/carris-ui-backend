@@ -14,6 +14,24 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+
+def parse_timestamp(timestamp_str: str) -> int:
+    """Convert timestamp string to Unix epoch (integer)"""
+    if not timestamp_str or timestamp_str == '':
+        return 0
+    
+    try:
+        # If it's already a number string, return it as int
+        return int(float(timestamp_str))
+    except (ValueError, TypeError):
+        try:
+            # Try parsing ISO format or other datetime strings
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            return int(dt.timestamp())
+        except:
+            return 0
+
+
 # Configuration from environment variables
 PORT = int(os.getenv('PORT', 8000))
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
@@ -297,14 +315,14 @@ async def get_vehicle_details(vehicle_id: str) -> Dict[str, Any]:
             'th': data.get('trip_headsign', ''),
             'sp': data.get('speed', ''),
             'br': data.get('two_shape_bearing', data.get('bearing', '')),
-            'ts': data.get('timestamp', ''),
-            'lu': data.get('last_updated', ''),
+            'ts': parse_timestamp(data.get('timestamp', '')),
+            'lu': parse_timestamp(data.get('last_updated', '')),
             'tid': data.get('trip_id', ''),
             'di': data.get('direction_id', ''),
-            'sst': data.get('scheduled_start_time', ''),
-            'set': data.get('scheduled_end_time', ''),
-            'ast': data.get('actual_start_time', ''),
-            'st': datetime.now().isoformat()
+            'sst': parse_timestamp(data.get('scheduled_start_time', '')),
+            'set': parse_timestamp(data.get('scheduled_end_time', '')),
+            'ast': parse_timestamp(data.get('actual_start_time', '')),
+            'st': int(datetime.now().timestamp())
         }
     except HTTPException:
         raise
