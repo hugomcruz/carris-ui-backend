@@ -8,6 +8,7 @@ import asyncpg
 import asyncio
 import json
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -303,7 +304,7 @@ async def get_vehicle_details(vehicle_id: str) -> Dict[str, Any]:
             'sst': data.get('scheduled_start_time', ''),
             'set': data.get('scheduled_end_time', ''),
             'ast': data.get('actual_start_time', ''),
-            'st': data.get('server_time', '')
+            'st': datetime.now().isoformat()
         }
     except HTTPException:
         raise
