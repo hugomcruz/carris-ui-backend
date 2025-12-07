@@ -302,7 +302,8 @@ async def get_vehicle_details(vehicle_id: str) -> Dict[str, Any]:
             'di': data.get('direction_id', ''),
             'sst': data.get('scheduled_start_time', ''),
             'set': data.get('scheduled_end_time', ''),
-            'ast': data.get('actual_start_time', '')
+            'ast': data.get('actual_start_time', ''),
+            'st': data.get('server_time', '')
         }
     except HTTPException:
         raise
