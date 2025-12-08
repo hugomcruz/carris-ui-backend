@@ -8,11 +8,19 @@ import asyncpg
 import asyncio
 import json
 import os
+import logging
 from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configure logging
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+
+# Get logger - configuration will be set by uvicorn's log-config
+logger = logging.getLogger(__name__)
+logger.setLevel(getattr(logging, LOG_LEVEL))
 
 
 def parse_timestamp(timestamp_str: str) -> int:
@@ -73,7 +81,7 @@ async def lifespan(app: FastAPI):
     global redis_client, db_pool, pubsub_task
     
     # Startup
-    print("Starting Carris Backend API...")
+    logger.info("Starting Carris Backend API...")
     
     # Connect to Redis
     redis_client = redis.Redis(
@@ -82,7 +90,7 @@ async def lifespan(app: FastAPI):
         password=REDIS_CONFIG['password'],
         decode_responses=True
     )
-    print(f"Connected to Redis at {REDIS_CONFIG['host']}:{REDIS_CONFIG['port']}")
+    logger.info(f"Connected to Redis at {REDIS_CONFIG['host']}:{REDIS_CONFIG['port']}")
     
     # Connect to PostgreSQL
     db_pool = await asyncpg.create_pool(
@@ -95,7 +103,7 @@ async def lifespan(app: FastAPI):
         max_size=10,
         command_timeout=60
     )
-    print(f"Connected to PostgreSQL database: {DB_CONFIG['database']}")
+    logger.info(f"Connected to PostgreSQL database: {DB_CONFIG['database']}")
     
     # Load and cache bus stops
     await load_and_cache_stops()
@@ -106,14 +114,14 @@ async def lifespan(app: FastAPI):
     # Start Redis pub/sub listener for real-time updates
     pubsub_task = asyncio.create_task(redis_pubsub_listener())
     
-    print(f"Server ready on http://localhost:{PORT}")
-    print("Listening for real-time Redis updates...")
-    print(f"Initial state: {len(vehicle_cache)} active vehicles, {len(stops_cache)} stops")
+    logger.info(f"Server ready on http://localhost:{PORT}")
+    logger.info("Listening for real-time Redis updates...")
+    logger.info(f"Initial state: {len(vehicle_cache)} active vehicles, {len(stops_cache)} stops")
     
     yield
     
     # Shutdown
-    print("Shutting down...")
+    logger.info("Shutting down...")
     if pubsub_task:
         pubsub_task.cancel()
         try:
@@ -154,7 +162,7 @@ async def load_and_cache_stops():
     global stops_cache, stop_details_cache
     
     try:
-        print('Loading bus stops from database...')
+        logger.info('Loading bus stops from database...')
         
         query = """
             SELECT DISTINCT
@@ -195,9 +203,9 @@ async def load_and_cache_stops():
             for row in rows
         }
         
-        print(f"Cached {len(stops_cache)} bus stops")
+        logger.info(f"Cached {len(stops_cache)} bus stops")
     except Exception as error:
-        print(f"Error loading stops: {error}")
+        logger.error(f"Error loading stops: {error}")
 
 
 async def fetch_and_cache_vehicles(broadcast: bool = True):
@@ -211,7 +219,7 @@ async def fetch_and_cache_vehicles(broadcast: bool = True):
         
         if not keys:
             vehicle_cache = []
-            print("No vehicles found in Redis")
+            logger.info("No vehicles found in Redis")
             return
         
         # Fetch all hash values
@@ -237,21 +245,21 @@ async def fetch_and_cache_vehicles(broadcast: bool = True):
                         'lat': lat,
                         'lng': lng,
                         'rsn': data.get('route_short_name', 'N/A'),
-                        'lp': data.get('license_plate', ''),
                         'tid': data.get('trip_id', ''),
-                        'br': data.get('two_shape_bearing', data.get('bearing', '0'))
+                        'br': data.get('two_shape_bearing', data.get('bearing', '0')),
+                        'act': 1
                     })
             except (ValueError, TypeError):
                 continue
         
         vehicle_cache = vehicles
-        print(f"[INIT] Cached {len(vehicles)} vehicles from Redis")
+        logger.info(f"[INIT] Cached {len(vehicles)} vehicles from Redis")
         
         # Broadcast to all connected clients only if requested
         if broadcast:
             await sio.emit('vehicles', vehicle_cache)
     except Exception as error:
-        print(f"Error fetching vehicles: {error}")
+        logger.error(f"Error fetching vehicles: {error}")
 
 
 async def fetch_single_vehicle(vehicle_id: str):
@@ -274,9 +282,9 @@ async def fetch_single_vehicle(vehicle_id: str):
                 'lat': lat,
                 'lng': lng,
                 'rsn': data.get('route_short_name', 'N/A'),
-                'lp': data.get('license_plate', ''),
                 'tid': data.get('trip_id', ''),
-                'br': data.get('two_shape_bearing', data.get('bearing', '0'))
+                'br': data.get('two_shape_bearing', data.get('bearing', '0')),
+                'act': 1
             }
         return None
     except (ValueError, TypeError):
@@ -301,8 +309,8 @@ async def redis_pubsub_listener():
         # Subscribe to custom channel
         await pubsub.subscribe('vehicle:updates')
         
-        print("[PUBSUB] Subscribed to channel: vehicle:updates")
-        print("[PUBSUB] Waiting for messages...")
+        logger.info("[PUBSUB] Subscribed to channel: vehicle:updates")
+        logger.info("[PUBSUB] Waiting for messages...")
         
         async for message in pubsub.listen():
             try:
@@ -310,7 +318,7 @@ async def redis_pubsub_listener():
                 
                 # Debug: Print all message types initially
                 if msg_type not in ['subscribe', 'psubscribe']:
-                    print(f"[PUBSUB] Message type: {msg_type}, channel: {message.get('channel')}, data: {message.get('data')}")
+                    logger.debug(f"[PUBSUB] Message type: {msg_type}, channel: {message.get('channel')}, data: {message.get('data')}")
                 
                 # Handle custom channel messages
                 if msg_type == 'message' and message.get('channel') == 'vehicle:updates':
@@ -320,13 +328,13 @@ async def redis_pubsub_listener():
                         vehicle_id = update_data.get('vehicle_id')
                         
                         if not vehicle_id:
-                            print(f"[PUBSUB] No vehicle_id found in message")
+                            logger.warning(f"[PUBSUB] No vehicle_id found in message")
                             continue
                         
-                        print(f"[PUBSUB] Received update for vehicle: {vehicle_id}")
+                        logger.debug(f"[PUBSUB] Received update for vehicle: {vehicle_id}")
                         
                     except (json.JSONDecodeError, AttributeError) as e:
-                        print(f"[PUBSUB] Error parsing message: {e}")
+                        logger.error(f"[PUBSUB] Error parsing message: {e}")
                         continue
                     
                     # Fetch complete vehicle data from Redis
@@ -339,49 +347,41 @@ async def redis_pubsub_listener():
                         removed = old_cache_length - len(vehicle_cache)
                         vehicle_cache.append(vehicle_data)
                         
-                        print(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')}), Removed: {removed}, Cache size: {len(vehicle_cache)}")
+                        logger.debug(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')}), Removed: {removed}, Cache size: {len(vehicle_cache)}")
                         
-                        # Get client count
-                        try:
-                            participants = list(sio.manager.get_participants('/', '/'))
-                            client_count = len(participants[1]) if len(participants) > 1 else 0
-                        except:
-                            client_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+                        # Get client count (each client creates a room with their sid)
+                        client_count = len(sio.manager.rooms.get('/', {}))
                         
-                        print(f"[PUBSUB] Broadcasting to {client_count} connected clients")
+                        logger.debug(f"[PUBSUB] Broadcasting to {client_count} connected clients")
                         
                         # Broadcast to all connected clients
                         await sio.emit('vehicles', vehicle_cache)
-                        print(f"[PUBSUB] Broadcast complete")
+                        logger.debug(f"[PUBSUB] Broadcast complete")
                     else:
                         # Vehicle is inactive or deleted, remove from cache
                         old_length = len(vehicle_cache)
                         vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
                         if len(vehicle_cache) < old_length:
-                            print(f"[PUBSUB] Removed inactive vehicle: {vehicle_id}")
+                            logger.info(f"[PUBSUB] Removed inactive vehicle: {vehicle_id}")
                             
-                            # Get client count
-                            try:
-                                participants = list(sio.manager.get_participants('/', '/'))
-                                client_count = len(participants[1]) if len(participants) > 1 else 0
-                            except:
-                                client_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+                            # Get client count (each client creates a room with their sid)
+                            client_count = len(sio.manager.rooms.get('/', {}))
                             
-                            print(f"[PUBSUB] Broadcasting removal to {client_count} connected clients")
+                            logger.debug(f"[PUBSUB] Broadcasting removal to {client_count} connected clients")
                             await sio.emit('vehicles', vehicle_cache)
-                            print(f"[PUBSUB] Broadcast complete")
+                            logger.debug(f"[PUBSUB] Broadcast complete")
                             
             except Exception as error:
-                print(f"Error processing pub/sub message: {error}")
+                logger.error(f"Error processing pub/sub message: {error}")
                 continue
                 
     except asyncio.CancelledError:
-        print("Redis pub/sub listener cancelled")
+        logger.info("Redis pub/sub listener cancelled")
         raise
     except Exception as error:
-        print(f"Error in Redis pub/sub listener: {error}")
+        logger.error(f"Error in Redis pub/sub listener: {error}")
         # If pub/sub fails, fall back to periodic updates
-        print("Falling back to periodic updates...")
+        logger.warning("Falling back to periodic updates...")
         while True:
             try:
                 await asyncio.sleep(30)
@@ -389,48 +389,38 @@ async def redis_pubsub_listener():
             except asyncio.CancelledError:
                 break
             except Exception as error:
-                print(f"Error in fallback periodic update: {error}")
+                logger.error(f"Error in fallback periodic update: {error}")
 
 
 # Socket.IO event handlers
 @sio.event
 async def connect(sid, environ, auth):
     """Handle client connection"""
-    print(f'[SOCKETIO] Client connected: {sid}')
+    logger.info(f'[SOCKETIO] Client connected: {sid}')
     
     # Send current vehicle cache to the newly connected client
     await sio.emit('vehicles', vehicle_cache, room=sid)
-    print(f'[SOCKETIO] Sent {len(vehicle_cache)} vehicles to new client {sid}')
+    logger.debug(f'[SOCKETIO] Sent {len(vehicle_cache)} vehicles to new client {sid}')
     
-    # Get connected clients count
-    try:
-        participants = list(sio.manager.get_participants('/', '/'))
-        user_count = len(participants[1]) if len(participants) > 1 else 0
-    except:
-        # Fallback: count rooms
-        user_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+    # Get connected clients count (each client creates a room with their sid)
+    user_count = len(sio.manager.rooms.get('/', {}))
     
     # Broadcast user count to all clients
     await sio.emit('userCount', user_count)
-    print(f'[SOCKETIO] Total connected clients: {user_count}')
+    logger.debug(f'[SOCKETIO] Total connected clients: {user_count}')
 
 
 @sio.event
 async def disconnect(sid):
     """Handle client disconnection"""
-    print(f'[SOCKETIO] Client disconnected: {sid}')
+    logger.info(f'[SOCKETIO] Client disconnected: {sid}')
     
-    # Get connected clients count
-    try:
-        participants = list(sio.manager.get_participants('/', '/'))
-        user_count = len(participants[1]) if len(participants) > 1 else 0
-    except:
-        # Fallback: count rooms
-        user_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+    # Get connected clients count (each client creates a room with their sid)
+    user_count = len(sio.manager.rooms.get('/', {}))
     
     # Broadcast updated user count to remaining clients
     await sio.emit('userCount', user_count)
-    print(f'[SOCKETIO] Remaining connected clients: {user_count}')
+    logger.debug(f'[SOCKETIO] Remaining connected clients: {user_count}')
 
 
 # REST API Endpoints
@@ -747,8 +737,8 @@ async def test_broadcast():
         except:
             client_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
         
-        print(f"[TEST] Manual broadcast triggered - Cache size: {len(vehicle_cache)}, Clients: {client_count}")
-        print(f"[TEST] Sample vehicle from cache: {vehicle_cache[0] if vehicle_cache else 'No vehicles'}")
+        logger.info(f"[TEST] Manual broadcast triggered - Cache size: {len(vehicle_cache)}, Clients: {client_count}")
+        logger.debug(f"[TEST] Sample vehicle from cache: {vehicle_cache[0] if vehicle_cache else 'No vehicles'}")
         
         # Broadcast to all connected clients
         await sio.emit('vehicles', vehicle_cache)
@@ -761,7 +751,7 @@ async def test_broadcast():
             "sample_vehicle": vehicle_cache[0] if vehicle_cache else None
         }
     except Exception as error:
-        print(f"[TEST] Error during manual broadcast: {error}")
+        logger.error(f"[TEST] Error during manual broadcast: {error}")
         return {
             "status": "error",
             "error": str(error)
