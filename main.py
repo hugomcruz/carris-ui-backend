@@ -326,7 +326,15 @@ async def redis_pubsub_listener():
                         vehicle_cache.append(vehicle_data)
                         
                         print(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')})")
-                        print(f"[PUBSUB] Broadcasting to {len(sio.manager.get_participants('/', '/')[1])} connected clients")
+                        
+                        # Get client count
+                        try:
+                            participants = list(sio.manager.get_participants('/', '/'))
+                            client_count = len(participants[1]) if len(participants) > 1 else 0
+                        except:
+                            client_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+                        
+                        print(f"[PUBSUB] Broadcasting to {client_count} connected clients")
                         
                         # Broadcast to all connected clients
                         await sio.emit('vehicles', vehicle_cache)
@@ -337,7 +345,15 @@ async def redis_pubsub_listener():
                         vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
                         if len(vehicle_cache) < old_length:
                             print(f"[PUBSUB] Removed inactive vehicle: {vehicle_id}")
-                            print(f"[PUBSUB] Broadcasting removal to {len(sio.manager.get_participants('/', '/')[1])} connected clients")
+                            
+                            # Get client count
+                            try:
+                                participants = list(sio.manager.get_participants('/', '/'))
+                                client_count = len(participants[1]) if len(participants) > 1 else 0
+                            except:
+                                client_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+                            
+                            print(f"[PUBSUB] Broadcasting removal to {client_count} connected clients")
                             await sio.emit('vehicles', vehicle_cache)
                             print(f"[PUBSUB] Broadcast complete")
                             
@@ -364,7 +380,7 @@ async def redis_pubsub_listener():
 
 # Socket.IO event handlers
 @sio.event
-async def connect(sid, environ):
+async def connect(sid, environ, auth):
     """Handle client connection"""
     print(f'[SOCKETIO] Client connected: {sid}')
     
@@ -372,8 +388,15 @@ async def connect(sid, environ):
     await sio.emit('vehicles', vehicle_cache, room=sid)
     print(f'[SOCKETIO] Sent {len(vehicle_cache)} vehicles to new client {sid}')
     
+    # Get connected clients count
+    try:
+        participants = list(sio.manager.get_participants('/', '/'))
+        user_count = len(participants[1]) if len(participants) > 1 else 0
+    except:
+        # Fallback: count rooms
+        user_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+    
     # Broadcast user count to all clients
-    user_count = len(sio.manager.get_participants('/', '/')[1])
     await sio.emit('userCount', user_count)
     print(f'[SOCKETIO] Total connected clients: {user_count}')
 
@@ -383,8 +406,15 @@ async def disconnect(sid):
     """Handle client disconnection"""
     print(f'[SOCKETIO] Client disconnected: {sid}')
     
+    # Get connected clients count
+    try:
+        participants = list(sio.manager.get_participants('/', '/'))
+        user_count = len(participants[1]) if len(participants) > 1 else 0
+    except:
+        # Fallback: count rooms
+        user_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+    
     # Broadcast updated user count to remaining clients
-    user_count = len(sio.manager.get_participants('/', '/')[1])
     await sio.emit('userCount', user_count)
     print(f'[SOCKETIO] Remaining connected clients: {user_count}')
 
