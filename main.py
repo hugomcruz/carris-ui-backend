@@ -326,16 +326,20 @@ async def redis_pubsub_listener():
                         vehicle_cache.append(vehicle_data)
                         
                         print(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')})")
+                        print(f"[PUBSUB] Broadcasting to {len(sio.manager.get_participants('/', '/')[1])} connected clients")
                         
                         # Broadcast to all connected clients
                         await sio.emit('vehicles', vehicle_cache)
+                        print(f"[PUBSUB] Broadcast complete")
                     else:
                         # Vehicle is inactive or deleted, remove from cache
                         old_length = len(vehicle_cache)
                         vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
                         if len(vehicle_cache) < old_length:
                             print(f"[PUBSUB] Removed inactive vehicle: {vehicle_id}")
+                            print(f"[PUBSUB] Broadcasting removal to {len(sio.manager.get_participants('/', '/')[1])} connected clients")
                             await sio.emit('vehicles', vehicle_cache)
+                            print(f"[PUBSUB] Broadcast complete")
                             
             except Exception as error:
                 print(f"Error processing pub/sub message: {error}")
@@ -362,22 +366,27 @@ async def redis_pubsub_listener():
 @sio.event
 async def connect(sid, environ):
     """Handle client connection"""
-    print(f'Client connected: {sid}')
-    await sio.emit('vehicles', vehicle_cache, room=sid)
+    print(f'[SOCKETIO] Client connected: {sid}')
     
-    # Broadcast user count
-    user_count = len(sio.manager.rooms.get('/', {}).keys())
+    # Send current vehicle cache to the newly connected client
+    await sio.emit('vehicles', vehicle_cache, room=sid)
+    print(f'[SOCKETIO] Sent {len(vehicle_cache)} vehicles to new client {sid}')
+    
+    # Broadcast user count to all clients
+    user_count = len(sio.manager.get_participants('/', '/')[1])
     await sio.emit('userCount', user_count)
+    print(f'[SOCKETIO] Total connected clients: {user_count}')
 
 
 @sio.event
 async def disconnect(sid):
     """Handle client disconnection"""
-    print(f'Client disconnected: {sid}')
+    print(f'[SOCKETIO] Client disconnected: {sid}')
     
-    # Broadcast updated user count
-    user_count = len(sio.manager.rooms.get('/', {}).keys())
+    # Broadcast updated user count to remaining clients
+    user_count = len(sio.manager.get_participants('/', '/')[1])
     await sio.emit('userCount', user_count)
+    print(f'[SOCKETIO] Remaining connected clients: {user_count}')
 
 
 # REST API Endpoints
