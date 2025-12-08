@@ -58,7 +58,7 @@ stops_cache: List[Dict[str, Any]] = []
 stop_details_cache: Dict[str, Dict[str, Any]] = {}
 redis_client = None
 db_pool = None
-update_task = None
+pubsub_task = None
 
 # Socket.IO server
 sio = socketio.AsyncServer(
@@ -70,7 +70,7 @@ sio = socketio.AsyncServer(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global redis_client, db_pool, update_task
+    global redis_client, db_pool, pubsub_task
     
     # Startup
     print("Starting Carris Backend API...")
@@ -100,22 +100,24 @@ async def lifespan(app: FastAPI):
     # Load and cache bus stops
     await load_and_cache_stops()
     
-    # Initial vehicle fetch
-    await fetch_and_cache_vehicles()
+    # Initial vehicle fetch from Redis (don't broadcast on startup)
+    await fetch_and_cache_vehicles(broadcast=False)
     
-    # Start periodic update task
-    update_task = asyncio.create_task(periodic_vehicle_updates())
+    # Start Redis pub/sub listener for real-time updates
+    pubsub_task = asyncio.create_task(redis_pubsub_listener())
     
     print(f"Server ready on http://localhost:{PORT}")
+    print("Listening for real-time Redis updates...")
+    print(f"Initial state: {len(vehicle_cache)} active vehicles, {len(stops_cache)} stops")
     
     yield
     
     # Shutdown
     print("Shutting down...")
-    if update_task:
-        update_task.cancel()
+    if pubsub_task:
+        pubsub_task.cancel()
         try:
-            await update_task
+            await pubsub_task
         except asyncio.CancelledError:
             pass
     
@@ -198,7 +200,7 @@ async def load_and_cache_stops():
         print(f"Error loading stops: {error}")
 
 
-async def fetch_and_cache_vehicles():
+async def fetch_and_cache_vehicles(broadcast: bool = True):
     """Fetch and cache all vehicle data from Redis"""
     global vehicle_cache
     
@@ -209,6 +211,7 @@ async def fetch_and_cache_vehicles():
         
         if not keys:
             vehicle_cache = []
+            print("No vehicles found in Redis")
             return
         
         # Fetch all hash values
@@ -242,24 +245,111 @@ async def fetch_and_cache_vehicles():
                 continue
         
         vehicle_cache = vehicles
-        print(f"Cached {len(vehicles)} vehicles from Redis")
+        print(f"[INIT] Cached {len(vehicles)} vehicles from Redis")
         
-        # Broadcast to all connected clients
-        await sio.emit('vehicles', vehicle_cache)
+        # Broadcast to all connected clients only if requested
+        if broadcast:
+            await sio.emit('vehicles', vehicle_cache)
     except Exception as error:
         print(f"Error fetching vehicles: {error}")
 
 
-async def periodic_vehicle_updates():
-    """Periodic task to update vehicles every 30 seconds"""
-    while True:
-        try:
-            await asyncio.sleep(30)
-            await fetch_and_cache_vehicles()
-        except asyncio.CancelledError:
-            break
-        except Exception as error:
-            print(f"Error in periodic update: {error}")
+async def fetch_single_vehicle(vehicle_id: str):
+    """Fetch and return a single vehicle's data"""
+    try:
+        data = await redis_client.hgetall(f'vehicle:{vehicle_id}')
+        if not data:
+            return None
+        
+        # Only include vehicles with status=active
+        if data.get('status') != 'active':
+            return None
+        
+        lat = float(data.get('latitude', 0))
+        lng = float(data.get('longitude', 0))
+        
+        if lat and lng:
+            return {
+                'id': vehicle_id,
+                'lat': lat,
+                'lng': lng,
+                'rsn': data.get('route_short_name', 'N/A'),
+                'lp': data.get('license_plate', ''),
+                'tid': data.get('trip_id', ''),
+                'br': data.get('two_shape_bearing', data.get('bearing', '0'))
+            }
+        return None
+    except (ValueError, TypeError):
+        return None
+
+
+async def redis_pubsub_listener():
+    """Listen to Redis pub/sub for real-time vehicle updates"""
+    global vehicle_cache
+    
+    try:
+        # Create a separate Redis connection for pub/sub
+        pubsub_redis = redis.Redis(
+            host=REDIS_CONFIG['host'],
+            port=REDIS_CONFIG['port'],
+            password=REDIS_CONFIG['password'],
+            decode_responses=True
+        )
+        
+        pubsub = pubsub_redis.pubsub()
+        # Subscribe to vehicle update channel
+        await pubsub.subscribe('vehicle:updates')
+        print("Subscribed to Redis channel: vehicle:updates")
+        
+        async for message in pubsub.listen():
+            try:
+                if message['type'] == 'message':
+                    # Message data contains the vehicle_id
+                    vehicle_id = message['data']
+                    print(f"[PUBSUB] Received update for vehicle: {vehicle_id}")
+                    
+                    # Fetch updated vehicle data
+                    vehicle_data = await fetch_single_vehicle(vehicle_id)
+                    
+                    if vehicle_data:
+                        # Update cache
+                        # Remove old entry if exists
+                        vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
+                        # Add updated entry
+                        vehicle_cache.append(vehicle_data)
+                        
+                        print(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')})")
+                        
+                        # Broadcast to all connected clients
+                        await sio.emit('vehicles', vehicle_cache)
+                    else:
+                        # Vehicle is inactive or deleted, remove from cache
+                        old_length = len(vehicle_cache)
+                        vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
+                        if len(vehicle_cache) < old_length:
+                            print(f"[PUBSUB] Removed inactive vehicle: {vehicle_id}")
+                            # Broadcast updated list if vehicle was removed
+                            await sio.emit('vehicles', vehicle_cache)
+                            
+            except Exception as error:
+                print(f"Error processing pub/sub message: {error}")
+                continue
+                
+    except asyncio.CancelledError:
+        print("Redis pub/sub listener cancelled")
+        raise
+    except Exception as error:
+        print(f"Error in Redis pub/sub listener: {error}")
+        # If pub/sub fails, fall back to periodic updates
+        print("Falling back to periodic updates...")
+        while True:
+            try:
+                await asyncio.sleep(30)
+                await fetch_and_cache_vehicles()
+            except asyncio.CancelledError:
+                break
+            except Exception as error:
+                print(f"Error in fallback periodic update: {error}")
 
 
 # Socket.IO event handlers
