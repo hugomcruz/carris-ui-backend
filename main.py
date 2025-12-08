@@ -297,14 +297,23 @@ async def redis_pubsub_listener():
         )
         
         pubsub = pubsub_redis.pubsub()
-        # Subscribe to vehicle update channel
+        
+        # Subscribe to custom channel
         await pubsub.subscribe('vehicle:updates')
-        print("Subscribed to Redis channel: vehicle:updates")
+        
+        print("[PUBSUB] Subscribed to channel: vehicle:updates")
+        print("[PUBSUB] Waiting for messages...")
         
         async for message in pubsub.listen():
             try:
-                if message['type'] == 'message':
-                    # Message data contains the vehicle_id
+                msg_type = message.get('type')
+                
+                # Debug: Print all message types initially
+                if msg_type not in ['subscribe', 'psubscribe']:
+                    print(f"[PUBSUB] Message type: {msg_type}, channel: {message.get('channel')}, data: {message.get('data')}")
+                
+                # Handle custom channel messages
+                if msg_type == 'message' and message.get('channel') == 'vehicle:updates':
                     vehicle_id = message['data']
                     print(f"[PUBSUB] Received update for vehicle: {vehicle_id}")
                     
@@ -313,9 +322,7 @@ async def redis_pubsub_listener():
                     
                     if vehicle_data:
                         # Update cache
-                        # Remove old entry if exists
                         vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
-                        # Add updated entry
                         vehicle_cache.append(vehicle_data)
                         
                         print(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')})")
@@ -328,7 +335,6 @@ async def redis_pubsub_listener():
                         vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
                         if len(vehicle_cache) < old_length:
                             print(f"[PUBSUB] Removed inactive vehicle: {vehicle_id}")
-                            # Broadcast updated list if vehicle was removed
                             await sio.emit('vehicles', vehicle_cache)
                             
             except Exception as error:
