@@ -314,18 +314,58 @@ async def redis_pubsub_listener():
                 
                 # Handle custom channel messages
                 if msg_type == 'message' and message.get('channel') == 'vehicle:updates':
-                    vehicle_id = message['data']
-                    print(f"[PUBSUB] Received update for vehicle: {vehicle_id}")
-                    
-                    # Fetch updated vehicle data
-                    vehicle_data = await fetch_single_vehicle(vehicle_id)
+                    # Parse the JSON message
+                    try:
+                        update_data = json.loads(message['data'])
+                        vehicle_id = update_data.get('vehicle_id')
+                        
+                        if not vehicle_id:
+                            print(f"[PUBSUB] No vehicle_id found in message")
+                            continue
+                        
+                        # Build vehicle data from the pub/sub message directly
+                        lat = float(update_data.get('latitude', 0))
+                        lng = float(update_data.get('longitude', 0))
+                        
+                        if not lat or not lng:
+                            print(f"[PUBSUB] Invalid coordinates for vehicle {vehicle_id}")
+                            continue
+                        
+                        # Get route_short_name from Redis if not in message
+                        route_short_name = update_data.get('route_short_name')
+                        license_plate = update_data.get('license_plate', '')
+                        
+                        # If route info is missing, fetch from Redis
+                        if not route_short_name:
+                            redis_data = await redis_client.hgetall(f'vehicle:{vehicle_id}')
+                            route_short_name = redis_data.get('route_short_name', 'N/A')
+                            if not license_plate:
+                                license_plate = redis_data.get('license_plate', '')
+                        
+                        vehicle_data = {
+                            'id': vehicle_id,
+                            'lat': lat,
+                            'lng': lng,
+                            'rsn': route_short_name or 'N/A',
+                            'lp': license_plate,
+                            'tid': update_data.get('trip_id', ''),
+                            'br': update_data.get('two_shape_bearing', update_data.get('bearing', '0'))
+                        }
+                        
+                        print(f"[PUBSUB] Received update for vehicle: {vehicle_id} - Route: {vehicle_data['rsn']}, Position: ({lat}, {lng})")
+                        
+                    except (json.JSONDecodeError, AttributeError, ValueError, TypeError) as e:
+                        print(f"[PUBSUB] Error parsing message: {e}")
+                        continue
                     
                     if vehicle_data:
                         # Update cache
+                        old_cache_length = len(vehicle_cache)
                         vehicle_cache = [v for v in vehicle_cache if v['id'] != vehicle_id]
+                        removed = old_cache_length - len(vehicle_cache)
                         vehicle_cache.append(vehicle_data)
                         
-                        print(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')})")
+                        print(f"[PUBSUB] Updated vehicle {vehicle_id} - Route: {vehicle_data.get('rsn', 'N/A')}, Position: ({vehicle_data.get('lat')}, {vehicle_data.get('lng')}), Removed: {removed}, Cache size: {len(vehicle_cache)}")
                         
                         # Get client count
                         try:
@@ -720,6 +760,38 @@ async def root():
         "vehicles": len(vehicle_cache),
         "stops": len(stops_cache)
     }
+
+
+@app.get("/api/test/broadcast")
+async def test_broadcast():
+    """Test endpoint to manually trigger a Socket.IO broadcast"""
+    try:
+        # Get client count
+        try:
+            participants = list(sio.manager.get_participants('/', '/'))
+            client_count = len(participants[1]) if len(participants) > 1 else 0
+        except:
+            client_count = len([room for room in sio.manager.rooms.get('/', {}).keys()])
+        
+        print(f"[TEST] Manual broadcast triggered - Cache size: {len(vehicle_cache)}, Clients: {client_count}")
+        print(f"[TEST] Sample vehicle from cache: {vehicle_cache[0] if vehicle_cache else 'No vehicles'}")
+        
+        # Broadcast to all connected clients
+        await sio.emit('vehicles', vehicle_cache)
+        
+        return {
+            "status": "ok",
+            "broadcasted": True,
+            "vehicles_count": len(vehicle_cache),
+            "connected_clients": client_count,
+            "sample_vehicle": vehicle_cache[0] if vehicle_cache else None
+        }
+    except Exception as error:
+        print(f"[TEST] Error during manual broadcast: {error}")
+        return {
+            "status": "error",
+            "error": str(error)
+        }
 
 
 if __name__ == "__main__":
