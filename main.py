@@ -314,7 +314,7 @@ async def redis_pubsub_listener():
                 
                 # Handle custom channel messages
                 if msg_type == 'message' and message.get('channel') == 'vehicle:updates':
-                    # Parse the JSON message
+                    # Parse the JSON message to get vehicle_id
                     try:
                         update_data = json.loads(message['data'])
                         vehicle_id = update_data.get('vehicle_id')
@@ -323,40 +323,14 @@ async def redis_pubsub_listener():
                             print(f"[PUBSUB] No vehicle_id found in message")
                             continue
                         
-                        # Build vehicle data from the pub/sub message directly
-                        lat = float(update_data.get('latitude', 0))
-                        lng = float(update_data.get('longitude', 0))
+                        print(f"[PUBSUB] Received update for vehicle: {vehicle_id}")
                         
-                        if not lat or not lng:
-                            print(f"[PUBSUB] Invalid coordinates for vehicle {vehicle_id}")
-                            continue
-                        
-                        # Get route_short_name from Redis if not in message
-                        route_short_name = update_data.get('route_short_name')
-                        license_plate = update_data.get('license_plate', '')
-                        
-                        # If route info is missing, fetch from Redis
-                        if not route_short_name:
-                            redis_data = await redis_client.hgetall(f'vehicle:{vehicle_id}')
-                            route_short_name = redis_data.get('route_short_name', 'N/A')
-                            if not license_plate:
-                                license_plate = redis_data.get('license_plate', '')
-                        
-                        vehicle_data = {
-                            'id': vehicle_id,
-                            'lat': lat,
-                            'lng': lng,
-                            'rsn': route_short_name or 'N/A',
-                            'lp': license_plate,
-                            'tid': update_data.get('trip_id', ''),
-                            'br': update_data.get('two_shape_bearing', update_data.get('bearing', '0'))
-                        }
-                        
-                        print(f"[PUBSUB] Received update for vehicle: {vehicle_id} - Route: {vehicle_data['rsn']}, Position: ({lat}, {lng})")
-                        
-                    except (json.JSONDecodeError, AttributeError, ValueError, TypeError) as e:
+                    except (json.JSONDecodeError, AttributeError) as e:
                         print(f"[PUBSUB] Error parsing message: {e}")
                         continue
+                    
+                    # Fetch complete vehicle data from Redis
+                    vehicle_data = await fetch_single_vehicle(vehicle_id)
                     
                     if vehicle_data:
                         # Update cache
