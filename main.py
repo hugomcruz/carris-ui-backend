@@ -68,6 +68,7 @@ redis_client = None
 db_pool = None
 pubsub_task = None
 user_count_logger_task = None
+client_ips: Dict[str, str] = {}  # Map session IDs to IP addresses
 
 # Socket.IO server
 sio = socketio.AsyncServer(
@@ -423,7 +424,40 @@ async def redis_pubsub_listener():
 @sio.event
 async def connect(sid, environ, auth):
     """Handle client connection"""
-    logger.info(f'[SOCKETIO] Client connected: {sid}')
+    # Extract client IP address from environ
+    client_ip = 'unknown'
+    if 'asgi.scope' in environ:
+        scope = environ['asgi.scope']
+        headers = dict(scope.get('headers', []))
+        
+        # Priority order for getting real client IP when behind Cloudflare/proxies:
+        # 1. CF-Connecting-IP (Cloudflare's header with real client IP)
+        # 2. X-Real-IP (common proxy header)
+        # 3. X-Forwarded-For (standard proxy header, may contain multiple IPs)
+        # 4. Direct client address (fallback)
+        
+        cf_connecting_ip = headers.get(b'cf-connecting-ip', b'').decode('utf-8')
+        if cf_connecting_ip:
+            client_ip = cf_connecting_ip
+        else:
+            x_real_ip = headers.get(b'x-real-ip', b'').decode('utf-8')
+            if x_real_ip:
+                client_ip = x_real_ip
+            else:
+                forwarded_for = headers.get(b'x-forwarded-for', b'').decode('utf-8')
+                if forwarded_for:
+                    # Take the first IP in the chain (original client)
+                    client_ip = forwarded_for.split(',')[0].strip()
+                else:
+                    # Fall back to direct client address
+                    client = scope.get('client')
+                    if client and len(client) > 0:
+                        client_ip = client[0]
+    
+    # Store IP for disconnect logging
+    client_ips[sid] = client_ip
+    
+    logger.info(f'[SOCKETIO] Client connected - Session ID: {sid}, IP: {client_ip}')
     
     # Send current vehicle cache to the newly connected client
     await sio.emit('vehicles', vehicle_cache, room=sid)
@@ -440,7 +474,10 @@ async def connect(sid, environ, auth):
 @sio.event
 async def disconnect(sid):
     """Handle client disconnection"""
-    logger.info(f'[SOCKETIO] Client disconnected: {sid}')
+    # Retrieve and remove stored IP address
+    client_ip = client_ips.pop(sid, 'unknown')
+    
+    logger.info(f'[SOCKETIO] Client disconnected - Session ID: {sid}, IP: {client_ip}')
     
     # Get connected clients count (each client creates a room with their sid)
     user_count = len(sio.manager.rooms.get('/', {}))
