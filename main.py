@@ -67,6 +67,7 @@ stop_details_cache: Dict[str, Dict[str, Any]] = {}
 redis_client = None
 db_pool = None
 pubsub_task = None
+user_count_logger_task = None
 
 # Socket.IO server
 sio = socketio.AsyncServer(
@@ -78,7 +79,7 @@ sio = socketio.AsyncServer(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global redis_client, db_pool, pubsub_task
+    global redis_client, db_pool, pubsub_task, user_count_logger_task
     
     # Startup
     logger.info("Starting Carris Backend API...")
@@ -114,6 +115,9 @@ async def lifespan(app: FastAPI):
     # Start Redis pub/sub listener for real-time updates
     pubsub_task = asyncio.create_task(redis_pubsub_listener())
     
+    # Start user count logger
+    user_count_logger_task = asyncio.create_task(log_user_count_periodically())
+    
     logger.info(f"Server ready on http://localhost:{PORT}")
     logger.info("Listening for real-time Redis updates...")
     logger.info(f"Initial state: {len(vehicle_cache)} active vehicles, {len(stops_cache)} stops")
@@ -126,6 +130,13 @@ async def lifespan(app: FastAPI):
         pubsub_task.cancel()
         try:
             await pubsub_task
+        except asyncio.CancelledError:
+            pass
+    
+    if user_count_logger_task:
+        user_count_logger_task.cancel()
+        try:
+            await user_count_logger_task
         except asyncio.CancelledError:
             pass
     
@@ -289,6 +300,22 @@ async def fetch_single_vehicle(vehicle_id: str):
         return None
     except (ValueError, TypeError):
         return None
+
+
+async def log_user_count_periodically():
+    """Log the number of connected users every 15 seconds"""
+    try:
+        while True:
+            await asyncio.sleep(15)
+            try:
+                # Get connected clients count
+                user_count = len(sio.manager.rooms.get('/', {}))
+                logger.info(f"[USER_COUNT] Connected users: {user_count}")
+            except Exception as error:
+                logger.error(f"Error getting user count: {error}")
+    except asyncio.CancelledError:
+        logger.info("User count logger cancelled")
+        raise
 
 
 async def redis_pubsub_listener():
