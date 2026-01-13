@@ -309,8 +309,8 @@ async def log_user_count_periodically():
         while True:
             await asyncio.sleep(15)
             try:
-                # Get connected clients count
-                user_count = len(sio.manager.rooms.get('/', {}))
+                # Get connected clients count from eio sessions
+                user_count = len(sio.eio.sockets)
                 logger.info(f"[USER_COUNT] Connected users: {user_count}")
             except Exception as error:
                 logger.error(f"Error getting user count: {error}")
@@ -463,8 +463,8 @@ async def connect(sid, environ, auth):
     await sio.emit('vehicles', vehicle_cache, room=sid)
     logger.debug(f'[SOCKETIO] Sent {len(vehicle_cache)} vehicles to new client {sid}')
     
-    # Get connected clients count (each client creates a room with their sid)
-    user_count = len(sio.manager.rooms.get('/', {}))
+    # Get connected clients count from eio sessions
+    user_count = len(sio.eio.sockets)
     
     # Broadcast user count to all clients
     await sio.emit('userCount', user_count)
@@ -479,8 +479,8 @@ async def disconnect(sid):
     
     logger.info(f'[SOCKETIO] Client disconnected - Session ID: {sid}, IP: {client_ip}')
     
-    # Get connected clients count (each client creates a room with their sid)
-    user_count = len(sio.manager.rooms.get('/', {}))
+    # Get connected clients count from eio sessions
+    user_count = len(sio.eio.sockets)
     
     # Broadcast updated user count to remaining clients
     await sio.emit('userCount', user_count)
